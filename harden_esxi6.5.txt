@@ -1,0 +1,303 @@
+ACCEPTANCE LEVEL :
+$ESXCli.software.acceptance.get.()
+$ESXCli.software.acceptance.Set("PartnerSupported") -> Remediation
+
+
+NTP configuration:
+Get-VMHost | Select Name, @{N="NTPSetting";E={$_ | Get-VMHostNtpServer}}
+$NTPServers = "pool.ntp.org", "pool2.ntp.org" -> Remediation
+Get-VMHost | Add-VmHostNtpServer $NTPServers
+
+
+Check firewall for restrict access to an ip address
+Get-VMHost $VMHost | Get-VMHostFirewallException -Enabled 1 | Where {$_.ExtensionData.AllowedHosts.AllIP}
+Get-VMHost | Get-AdvancedSetting -Name Config.HostAgent.plugins.solo.enableMob |Set-AdvancedSetting -value "false" -> Remediation
+
+
+Check if snmp has a good configuration
+Get-VMHostSnmp
+if not needed :
+    Get-VmHostSNMP | Set-VMHostSNMP -Enabled:$false -> Remediation
+Get-VmHostSNMP | Set-VMHostSNMP -Enabled:$true -ReadOnlyCommunity '<secret>'
+
+
+Ensure the dvfilter is not configured if not used :
+Get-VMHost | Select Name, @{N="Net.DVFilterBindIpAddress";E={$_ | Get-AdvancedSetting Net.DVFilterBindIpAddress | Select -ExpandProperty Values}}
+$var.'Net.DVFilterBindIpAddress'
+Get-VMHost | Foreach { Set-AdvancedSetting -VMHost $_ -Name Net.DVFilterBindIpAddress -IPValue "" } -> Remediation
+
+
+Ensure a centralized location is configured to collect ESXi host core dumps : 
+$ESXCli.system.coredump.network.Get()
+$ESXCli.system.coredump.network.set() -> Remediation
+esxcli system coredump network set -v [VMK#] -i [DUMP_SERVER] -o [PORT]
+# Enable remote Dump Collector
+esxcli system coredump network set -e true
+
+
+Ensure persistent logging is used :
+Get-VMHost | Select Name, @{N="Syslog.global.logDir";E={$_ | Get-AdvancedConfiguration Syslog.global.logDir | Select -ExpandProperty Values}}
+Get-VMHost | Foreach { Set-AdvancedConfiguration -VMHost $_ -NameSyslog.global.logDir -Value "<NewLocation>" } -> Remediation
+
+
+Ensure remote logging is activated :
+Get-VMHost | Select Name, @{N="Syslog.global.logHost";E={$_ | Get-AdvancedSetting Syslog.global.logHost}}
+Get-VMHost | Foreach { Set-<span>AdvancedSetting </span><span>-VMHost $_ -Name Syslog.global.logHost -Value "<NewLocation>" }</span> -> Remediation"
+
+
+Ensure a non-root user account exists for local admin access :
+$ESXCli.system.account.list()
+$ESXCli.system.account.add -> Remediation
+
+
+Ensure Active Directory is used for local user authentication : 
+Get-VMHost | Get-VMHostAuthentication | Select VmHost, Domain, DomainMembershipStatus
+Get-VMHost HOST1 | Get-VMHostAuthentication | Set-VMHostAuthentication -Domain domain.local -User support -Password Passw0rd -JoinDomain -> Remediation (user with rights to add esxi to domain)
+
+
+Esnure the maximum login attempt is 3 :
+Get-VMHost | Get-AdvancedSetting -Name Security.AccountLockFailures
+Get-VMHost | Get-AdvancedSetting -Name Security.AccountLockFailures | Set-AdvancedSetting -Value 3 -> Remediation
+
+
+Ensure account lockout is set to 15 minutes :
+Get-VMHost | Get-AdvancedSetting -Name Security.AccountUnlockTime
+Get-VMHost | Get-AdvancedSetting -Name Security.AccountUnlockTime | Set-AdvancedSetting -Value 900 -> Remediation
+
+
+Ensure the DCUI timeout is set to 600 seconds or less :
+Get-VMHost | Get-AdvancedSetting -Name UserVars.DcuiTimeOut
+Get-VMHost | Get-AdvancedSetting -Name UserVars.DcuiTimeOut | Set-AdvancedSetting -Value 600
+
+
+Ensure the ESXi shell is disabled :
+Get-VMHost | Get-VMHostService | Where { $_.key -eq "TSM" } | Select VMHost,Key, Label, Policy, Running, Required
+Get-VMHost | Get-VMHostService | Where { $_.key -eq "TSM" } | Set-VMHostService -Policy Off -> Remediation
+
+
+Ensure SSH is disabled :
+Get-VMHost | Get-VMHostService | Where { $_.key -eq "TSM-SSH" } | SelectVMHost, Key, Label, Policy, Running, Required
+Get-VMHost | Get-VMHostService | Where { $_.key -eq "TSM-SSH" } | Set-VMHostService -Policy Off -> Remediation
+
+
+Ensure CIM access is limited :
+New-VMHostAccount -ID ServiceUser -Password <password> -UserAccount -> Remediation
+
+
+Ensure lockdown mode is enable :
+Get-VMHost | Get-VMHostService | Where { $_.key -eq "DCUI" } (Check UI)
+Get-VMHost | Select Name,@{N="Lockdown";E={$_.Extensiondata.Config.adminDisabled}}
+(get-vmhost 10.10.10.10 | get-view).EnterLockdownMode()
+
+
+Ensure idle ESXi shell and SSH sessions time out after 300 seconds or less :
+Get-VMHost | Get-AdvancedSetting UserVars.ESXiShellInteractiveTimeOut 
+Get-VMHost | Get-AdvancedSetting -Name 'UserVars.ESXiShellInteractiveTimeOut' | Set-AdvancedSetting -Value "300" -> Remediation
+
+
+Ensure the shell services timeout is set to 1 hour or less :
+Get-VMHost | Get-AdvancedSetting UserVars.ESXiShellTimeOut
+Get-VMHost | Get-AdvancedSetting -Name 'UserVars.ESXiShellTimeOut' | Set-AdvancedSetting -Value "3600"
+
+
+Ensure DCUI has a trusted users list to lockdown mode :
+Get-VMHost | Get-AdvancedSetting -Name DCUI.Access
+
+
+Ensure bidirectional CHAP authentication for iSCSI traffic is enabled :
+Get-VMHost | Get-VMHostHba | Where {$_.Type -eq "Iscsi"} | Select VMHost,Device, ChapType, @{N="CHAPName";E={$_.AuthenticationProperties.ChapName}}
+Get-VMHostHba -Type Iscsi | Set-VMHostHba -MutualChapEnabled $true -ChapType Required -ChapName <initiator_name> -ChapPassword <pwd> -MutualChapName <initiator_name_1>  -MutualChapPassword <other_pwd>-> Remediation
+
+
+Ensure the vSwitch Forged Transmits, MAC Address, Promiscuous policy is set to reject :
+$var = Get-VirtualSwitch | select Name
+for($i=0; $i -lt $var.Length; $i++) {$ESXCli.network.vswitch.standard.policy.security.get($var.Name[$i])}
+$ESXCli.network.vswitch.standard.policy.security.set($false(forge), $false(mac), $false(Promiscuous), "vSwitch0") -> Remediation
+
+
+Ensure port groups are not configured to VLAN values reserved by upstream physical switches :
+1001-10024 and 4904 -> Cisco
+3068-4047 and 4094 -> Nexus
+Get-VirtualPortGroup -Standard | Select virtualSwitch, Name, VlanID
+
+
+Ensure informational messages from the VM to the VMX file are limited :
+Get-VM | Get-AdvancedSetting -Name "tools.setInfo.sizeLimit" | Select Entity,Name, Value
+Get-VM | New-AdvancedSetting -Name "tools.setInfo.sizeLimit" -value 1048576 -> Remediation
+
+
+Ensure only one remote console connection is permitted to a VM at any time : 
+Get-VM | Get-AdvancedSetting -Name "RemoteDisplay.maxConnections" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "RemoteDisplay.maxConnections" -value 1 -Force -> Remediation WAAAARNINNNNNNNG !!!!!! -> If you have concurrent sessions for the support
+
+
+Ensure unnecessary floppy devices are disconnected :
+Get-VM | Get-FloppyDrive | Select Parent, Name, ConnectionState
+Get-VM | Get-FloppyDrive | Remove-FloppyDrive -> Remediation
+
+
+Ensure unnecessary CD/DVD devices are disconnected :
+Get-VM | Get-CDDrive
+Get-VM | Get-CDDrive | Remove-CDDrive
+
+
+Ensure unauthorized modification and disconnection of devices is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.device.edit.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.device.edit.disable" -value $true -> Remediation
+
+
+Ensure unauthorized connection of devices is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.device.connectable.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.device.connectable.disable" -value $true -> Remediation
+
+
+Ensure Autologon is disable :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.ghi.autologon.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.ghi.autologon.disable" -value $true -> Remediation
+
+
+Ensure Bios BBS is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.bios.bbs.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.bios.bbs.disable" -value $true -> Remediation
+
+
+Ensure Guest Host Interaction Protocol Handler is set to disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.ghi.protocolhandler.info.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.ghi.protocolhandler.info.disable" -value $true -> Remediation
+
+Ensure Unity Taskbar is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.unity.taskbar.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.unity.taskbar.disable" -value $true -> Remediation
+
+Ensure Unity Active is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.unityActive.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.unityActive.disable" -value $True -> Remediation
+
+
+Ensure Unity Window Contents is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.unity.windowContents.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.unity.windowContents.disable" -value $True -> Remediation
+
+
+Ensure Unity Push Update is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.unity.push.update.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.unity.push.update.disable" -value $true
+
+
+Ensure Drag and Drop Version Get is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.vmxDnDVersionGet.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.vmxDnDVersionGet.disable"-value $true -> Remediation
+
+
+Ensure Drag and Drop Version Set is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.guestDnDVersionSet.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.guestDnDVersionSet.disable" -value $true -> Remediation
+
+Ensure shell action is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.ghi.host.shellAction.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.ghi.host.shellAction.disable" -value $true -> Remediation
+
+
+Ensure Request Disk Topology is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.dispTopoRequest.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.dispTopoRequest.disable" -value $true -> Remediation
+
+Ensure Trash Folder State is disabled : 
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.trashFolderState.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.trashFolderState.disable" -value $true -> Remediation
+
+Ensure Guest Host Interaction Tray Icon is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.ghi.trayicon.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.ghi.trayicon.disable" -value $true -> Remediation
+
+
+Ensure Unity is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.unity.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.unity.disable" -value $true -> Remediation
+
+Ensure Unity Interlock is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.unityInterlockOperation.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.unityInterlockOperation.disable" -value $true -> Remediation
+
+Ensure GetCreds is disabled : 
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.getCreds.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.getCreds.disable" -value $true -> Remediation
+
+
+Ensure Host Guest File System Server is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.hgfsServerSet.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.hgfsServerSet.disable" -value $true -> Remediation
+
+
+Ensure Guest Host Interaction Launch Menu is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.ghi.launchmenu.change" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.ghi.launchmenu.change" -value $true -> Remediation
+
+
+Ensure memSchedFakeSampleStats is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.memSchedFakeSampleStats.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.memSchedFakeSampleStats.disable" -value $true -> Remediation   
+
+
+Ensure VM Console Copy operations are disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.copy.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.copy.disable" -value $true -> Remediation 
+
+
+Ensure VM Console Drag and Drop operations is disabled : 
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.dnd.disable" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.dnd.disable" -value $true -> Remediation 
+
+
+Ensure VM Console GUI Options is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.setGUIOptions.enable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.setGUIOptions.enable" -value $false -> Remediation 
+
+Ensure VM Console Paste operations are disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.paste.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.paste.disable" -value $true -> Remediation
+
+
+Ensure access to VM console via VNC protocol is limited :
+Get-VM | Get-AdvancedSetting -Name "RemoteDisplay.vnc.enabled" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "RemoteDisplay.vnc.enabled" -value $false -> Remediation 
+
+
+Ensure all but VGA mode on virtual machines is disabled :
+Get-VM | Get-AdvancedSetting -Name "svga.vgaOnly" | Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "svga.vgaOnly" -value $true -> Remediation 
+
+
+Ensure hardware-based 3D acceleration is disabled :
+Get-VM | Get-AdvancedSetting -Name "mks.enable3d"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "mks.enable3d" -value $false -> Remediation 
+
+
+Ensure virtual disk shrinking is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.diskShrink.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.diskShrink.disable" -value $true -> Remediation
+
+
+Ensure virtual disk wiping is disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.diskWiper.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.diskWiper.disable" -value $true -> Remediation
+
+
+Ensure VIX messages from the VM are disabled :
+Get-VM | Get-AdvancedSetting -Name "isolation.tools.vixMessage.disable"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "isolation.tools.vixMessage.disable" -value $true
+
+
+Ensure the number of VM log files is configured properly :
+Get-VM | Get-AdvancedSetting -Name "log.keepOld"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "log.keepOld" -value "10" -> Remediation
+
+
+Ensure host information is not sent to guests :
+Get-VM | Get-AdvancedSetting -Name "tools.guestlib.enableHostInfo"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "tools.guestlib.enableHostInfo" -value $false
+
+
+Ensure VM log file size is limited : 
+Get-VM | Get-AdvancedSetting -Name "log.rotateSize"| Select Entity, Name, Value
+Get-VM | New-AdvancedSetting -Name "log.rotateSize" -value "1024000" -> Remediation
