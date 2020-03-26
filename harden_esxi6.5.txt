@@ -87,7 +87,7 @@ New-VMHostAccount -ID ServiceUser -Password <password> -UserAccount -> Remediati
 Ensure lockdown mode is enable :
 Get-VMHost | Get-VMHostService | Where { $_.key -eq "DCUI" } (Check UI)
 Get-VMHost | Select Name,@{N="Lockdown";E={$_.Extensiondata.Config.adminDisabled}}
-(get-vmhost 10.10.10.10 | get-view).EnterLockdownMode()
+(get-vmhost <host> | get-view).EnterLockdownMode()
 
 
 Ensure idle ESXi shell and SSH sessions time out after 300 seconds or less :
@@ -128,7 +128,7 @@ Get-VM | New-AdvancedSetting -Name "tools.setInfo.sizeLimit" -value 1048576 -> R
 
 Ensure only one remote console connection is permitted to a VM at any time : 
 Get-VM | Get-AdvancedSetting -Name "RemoteDisplay.maxConnections" | Select Entity, Name, Value
-Get-VM | New-AdvancedSetting -Name "RemoteDisplay.maxConnections" -value 1 -Force -> Remediation WAAAARNINNNNNNNG !!!!!! -> If you have concurrent sessions for the support
+Get-VM | New-AdvancedSetting -Name "RemoteDisplay.maxConnections" -value 2 -Force -> Remediation WAAAARNINNNNNNNG !!!!!! -> If you have concurrent sessions for the support
 
 
 Ensure unnecessary floppy devices are disconnected :
