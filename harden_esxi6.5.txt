@@ -14,6 +14,11 @@ Get-VMHost $VMHost | Get-VMHostFirewallException -Enabled 1 | Where {$_.Extensio
 Get-VMHost | Get-AdvancedSetting -Name Config.HostAgent.plugins.solo.enableMob |Set-AdvancedSetting -value "false" -> Remediation
 
 
+Ensure Managed Object Browser (MOB) is disabled : 
+Get-VMHost | Get-AdvancedSetting -Name Config.HostAgent.plugins.solo.enableMob
+Get-VMHost | Get-AdvancedSetting -Name Config.HostAgent.plugins.solo.enableMob |Set-AdvancedSetting -value "false" -> Remediation
+
+
 Check if snmp has a good configuration
 Get-VMHostSnmp
 if not needed :
