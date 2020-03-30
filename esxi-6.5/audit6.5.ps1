@@ -3,9 +3,9 @@
 #Check PowerCLI module
 
 if (Get-Module -ListAvailable -Name VMware.PowerCLI) {
-    Write-Host "[+] Module exists"
+    Write-Host "[+] PowerCLI module exists`n"
 } else {
-    Write-Host "[-] Module does not exist. Installation of PowerCLI"
+    Write-Host "[-] Module does not exist. PowerCLI installation..."
     Install-Module -Name VMware.PowerCLI -Force
     Set-PowerCLIConfiguration -InvalidCertificateAction:Ignore
 }
@@ -14,9 +14,10 @@ if (Get-Module -ListAvailable -Name VMware.PowerCLI) {
 $vcenter = Read-Host 'Enter vcenter IP '
 Connect-VIServer -Server $vcenter
 $hosts = Get-VMHost 
+$vms = Get-VM
 
 #Check Acceptance Level 
-Write-Host "############# Check VIB Acceptance Level #############"
+Write-Host "`n############# Check VIB Acceptance Level #############"
 Foreach ($esxhost in $hosts) {
     $esxcli = Get-EsxCli -VMHost $esxhost
     $acceptance = $esxcli.software.acceptance.get()
@@ -197,7 +198,7 @@ foreach ($esxhost in $hosts) {
         Write-Host "[+] $esxhost : The DCUI timeout is set for $value min`n" -ForegroundColor Green
     }
     else {
-        Write-Host "[+] $esxhost : The DCUI timeout is set for $value min. It should be set at least 10 min`n" -ForegroundColor Red
+        Write-Host "[-] $esxhost : The DCUI timeout is set for $value min. It should be set at least 10 min`n" -ForegroundColor Red
     }
 }
 
@@ -209,7 +210,7 @@ foreach ($esxhost in $hosts) {
         Write-Host "[+] $esxhost : ESXi shell is disabled`n" -ForegroundColor Green
     }
     else {
-        Write-Host "[+] $esxhost : ESXi shell is enabled. It should be disabled`n" -ForegroundColor Red
+        Write-Host "[-] $esxhost : ESXi shell is enabled. It should be disabled`n" -ForegroundColor Red
     }
 }
 
@@ -221,7 +222,7 @@ foreach ($esxhost in $hosts) {
         Write-Host "[+] $esxhost : ESXi shell is disabled`n" -ForegroundColor Green
     }
     else {
-        Write-Host "[+] $esxhost : ESXi shell is enabled. It should be disabled`n" -ForegroundColor Red
+        Write-Host "[-] $esxhost : ESXi shell is enabled. It should be disabled`n" -ForegroundColor Red
     }
 }
 
@@ -233,7 +234,7 @@ foreach ($esxhost in $hosts) {
         Write-Host "[+] $esxhost : Lockdown mode is enabled`n" -ForegroundColor Green
     }
     else {
-        Write-Host "[+] $esxhost : Lockdown mode is disabled. It should be enable`n" -ForegroundColor Red
+        Write-Host "[-] $esxhost : Lockdown mode is disabled. It should be enable`n" -ForegroundColor Red
     }
 }
 
@@ -259,6 +260,850 @@ foreach ($esxhost in $hosts) {
         Write-Host "[+] $esxhost : Shell services timeout after $value min`n" -ForegroundColor Green
     }
     else {
-        Write-Host "[+] $esxhost : Shell services timeout after $value min. It should be set to 1 hour or less`n" -ForegroundColor Red
+        Write-Host "[-] $esxhost : Shell services timeout after $value min. It should be set to 1 hour or less`n" -ForegroundColor Red
     }
+}
+
+#Check if DCUI has a trusted users list to lockdown
+Write-Host "############# Check DCUI Trusted Users List #############"
+foreach ($esxhost in $hosts) {
+    $trusted = Get-VMHost -Name $esxhost | Get-AdvancedSetting -Name DCUI.Access
+    if($trusted.Value.Length -gt 0) {
+        Write-Host "[+] $esxhost : DCUI Access List has at least one user`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] $esxhost : DCUI Access List has no users`n" -ForegroundColor Red
+    }
+}
+
+#Check iscsi
+Write-Host "############# Check iScsi Authentification #############"
+foreach ($esxhos in $hosts) {
+    $iscsi = Get-VMHostHba -VMHost $esxhost -Type IScsi
+    if($iscsi -ne $null) {        
+        $chaptest = $iscsi | Select VMHost, Device, ChapType, @{N="CHAPName";E={$_.AuthenticationProperties.ChapName}}
+        if($chaptest.Value -eq "Bidirectional CHAP") {
+            Write-Host "[+] $esxhost : Bidirectional CHAP is used`n" -ForegroundColor Green
+        }
+        else {
+            Write-Host "[-] $esxhost : Bidirectional CHAP is not used`n" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "[+] $esxhost : Not use iSCSi`n"
+    }
+}
+
+#Check vswitch
+Write-Host "############# Check vSwitch Security #############"
+foreach ($esxhost in $hosts) {
+    $counter = 0
+    $bad_vswitchs = New-Object System.Collections.ArrayList
+    $vswitchs = Get-VirtualSwitch -VMHost $esxhost | select Name
+    for($i=0; $i -lt $vswitchs.Length; $i++) {
+        $vswitch_opt = $esxcli.network.vswitch.standard.policy.security.get($vswitchs.Name[$i])
+        if($vswitch_opt.AllowForgedTransmits -eq $false -And $vswitch_opt.AllowMACAddressChange -eq $false -And $vswitch_opt.AllowPromiscuous -eq $false) {
+            $counter++
+        }
+        else {
+            $bad_vswitch.Add($vswitchs.Name[$i])
+        }
+    }
+    if($bad_vswitch.Length -eq 0) {
+        Write-Host "[+] $esxhost : vSwitch options are disabled`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] $esxhost : vSwitch options are enabled`n" -ForegroundColor Red
+    }
+}
+
+#Check vlan id in vswitch
+Write-Host "############# Check VLAN ID of PortGroups #############"
+$vlans_cisco = (1001..10024)
+$bad_portgroups = New-Object System.Collections.ArrayList
+$portgroups = Get-VirtualPortGroup -Standard | Select virtualSwitch, Name, VlanID
+for($i = 0;$i -lt $portgroups.Length;$i++) {
+    if($portgroups[$i].VLanId -In $vlans_cisco -Or $portgroups[$i].VLanId -eq 4094) {
+        $bad_portgroups.Add($portgroups[$i].Name)
+    }
+}
+if($bad_portgroups.count -eq 0) {
+    Write-Host "[+] Hosts Portgroups has a correct vlan ID configuration`n" -ForegroundColor Green
+}
+else {
+    Write-Host "[-] Host portgroups vlan ID are not correct -> $bad_portgroups`n" -ForegroundColor Red
+}
+
+#Check informational messages
+Write-Host "############# Check Informational Messages Limitation of VMX file  #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "tools.setInfo.sizeLimit" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "tools.setInfo.sizeLimit") {
+            if($size[$i].Value -ne 1048576) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Size limit for informational messages is set correctly`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Size limit for informational messages is not set correctly`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Size limit for informational messages is not set correctly`n" -ForegroundColor Red
+}
+
+#Remote console connection
+Write-Host "############# Check Remote Connection Limitation #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "RemoteDisplay.maxConnections" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "RemoteDisplay.maxConnectionst") {
+            if($size[$i].Value -gt 3) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Max connections on VM is configured correctly`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Max connections on VM is not configured correctly`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Max connections on VM is not configured correctly`n" -ForegroundColor Red
+}
+
+#Check floppy drives
+
+#Check unauthorized modification and disconnection of devices is disabled
+Write-Host "############# Check Unauthorized Modification and Disconnection of Devices #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.device.edit.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.device.edit.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Users without authorization cannot disconnect devices in vitual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Users without authorization can disconnect devices in virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Users without authorization can disconnect devices in virtual machines`n" -ForegroundColor Red
+}
+
+#Check unauthorized connection
+Write-Host "############# Check Unauthorized Connection of Devices #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.device.connectable.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.device.connectable.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Users without authorization cannot connect devices in vitual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Users without authorization can connect devices in vitual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Users without authorization can connect devices in vitual machines`n" -ForegroundColor Red
+}
+
+#Check if Autologon is disabled
+Write-Host "############# Check Autologon #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.ghi.autologon.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.ghi.autologon.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Autologin is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Autologon is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Autologon is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if BIOS BBS is disabled
+Write-Host "############# Check BIOS BBS #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.bios.bbs.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.bios.bbs.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] BIOS BBS is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] BIOS BBS is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] BIOS BBS is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if GHIP is disabled
+Write-Host "############# Check Guest Host Interaction Protocol Handler #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.ghi.protocolhandler.info.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.ghi.protocolhandler.info.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] GHI Protocol is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] GHI Protocol is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] GHI Protocol is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check Unity Taskbar
+Write-Host "############# Check Unity Taskbar #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.unity.taskbar.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.unity.taskbar.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Unity Taskbar is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Unity Taskbar is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Unity Taskbar is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check Unity Window Contents
+Write-Host "############# Check Unity Window Contents #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.unity.windowContents.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.unity.windowContents.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Unity Window Contents is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Unity Window Contents is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Unity Window Contents is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Unity Push Update is disabled
+Write-Host "############# Check Unity Push Update #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.unity.push.update.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.unity.push.update.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Unity Push Update is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Unity Push Update is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Unity Push Update is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if drag and drop version get is disabled
+Write-Host "############# Check Drag and Drop Version Get #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.vmxDnDVersionGet.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.vmxDnDVersionGet.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Drag and Drop Version Get is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Drag and Drop Version Get is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Drag and Drop Version Get is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Drag and Drop Version Set is disabled
+Write-Host "############# Check Drag and Drop Version Set #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.guestDnDVersionSet.disable" | Select Entity,Name, Value
+for($i = 0;$i -lt $size.Length;$i++) {
+    if($size[$i].Name -eq "isolation.tools.guestDnDVersionSet.disable") {
+        if($size[$i].Value -eq $false) {
+            $counter++
+        }
+    }
+}
+if($counter -eq 0) {
+    Write-Host "[+] Drag and Drop Version Set is disabled on virtual machines`n" -ForegroundColor Green
+}
+else {
+    Write-Host "[-] Drag and Drop Version Set is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if shell is disabled
+Write-Host "############# Check Shell Action #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.ghi.host.shellAction.disable" | Select Entity,Name, Value
+for($i = 0;$i -lt $size.Length;$i++) {
+    if($size[$i].Name -eq "isolation.ghi.host.shellAction.disable") {
+        if($size[$i].Value -eq $false) {
+            $counter++
+        }
+    }
+}
+if($counter -eq 0) {
+    Write-Host "[+] Shell Action is disabled on virtual machines`n" -ForegroundColor Green
+}
+else {
+    Write-Host "[-] Shell Action is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if request topology is disabled
+Write-Host "############# Check Request Disk Topology #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.dispTopoRequest.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.dispTopoRequest.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Request Disk Topology is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Request Disk Topology is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Request Disk Topology is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if trash folder is disabled
+Write-Host "############# Check Trash Folder #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.trashFolderState.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.trashFolderState.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Trash Folder is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Trash Folder is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Trash Folder is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Tray Icon is disabled
+Write-Host "############# Check Trash Folder #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.trashFolderState.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.ghi.trayicon.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Tray Icon is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Tray Icon is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Tray Icon is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Unity is disabled
+Write-Host "############# Check Unity #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.unity.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.unity.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Unity is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Unity is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Unity is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Unity Interlock is disabled
+Write-Host "############# Check Unity #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.unityInterlockOperation.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.unityInterlockOperation.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Unity Interlock is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Unity Interlock is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Unity Interlock is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if GetCreds is disabled
+Write-Host "############# Check GetCreds #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.getCreds.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.getCreds.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] GetCreds is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] GetCreds is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] GetCreds is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Host Guest File System Server is disabled
+Write-Host "############# Check Host Guest File System Server #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.hgfsServerSet.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.hgfsServerSet.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Host Guest File System Server is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Host Guest File System Server is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Host Guest File System Server is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Guest Host Interaction Launch Menu is disabled
+Write-Host "############# Check Guest Host Interaction Launch Menu #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.ghi.launchmenu.change" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.ghi.launchmenu.change") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Guest Host Interaction Launch Menu is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Guest Host Interaction Launch Menu is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Guest Host Interaction Launch Menu is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if memSchedFakeSampleStats is disabled
+Write-Host "############# Check memSchedFakeSampleStats #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.memSchedFakeSampleStats.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.memSchedFakeSampleStats.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] memSchedFakeSampleStats is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] memSchedFakeSampleStats is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] memSchedFakeSampleStats is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Console Copy Operations is disabled
+Write-Host "############# Check Console Copy Operations #############"
+$counter = 0
+    $size = $vms | Get-AdvancedSetting -Name "isolation.tools.copy.disable" | Select Entity,Name, Value
+    if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.copy.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Console Copy Operations is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Console Copy Operations is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Console Copy Operations is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Drag and Drop Operations is disabled
+Write-Host "############# Check Drag and Drop Operations #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.dnd.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.dnd.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Drag and Drop Operations is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Drag and Drop Operations is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Drag and Drop Operations is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Console GUI Options is disabled
+Write-Host "############# Check Console GUI Options #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.setGUIOptions.enable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.setGUIOptions.enable") {
+            if($size[$i].Value -eq $true) {
+                $counter++
+            }
+        }
+    }   
+    if($counter -eq 0) {
+        Write-Host "[+] Drag and Drop Operations is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Drag and Drop Operations is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Drag and Drop Operations is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if Console Paste Operations is disabled
+Write-Host "############# Check Console Paste Operations #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.paste.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.paste.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Console Paste Operations is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Console Paste Operations is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Console Paste Operations is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if VNC protocol is limited
+Write-Host "############# Check VNC Protocol #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "RemoteDisplay.vnc.enabled" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "RemoteDisplay.vnc.enabled") {
+            if($size[$i].Value -eq $true) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] VNC Protocol is disabled on virtual machines`n" -ForegroundColor Green
+    }   
+    else {
+        Write-Host "[-] VNC Protocol is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] VNC Protocol is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if VGA mode is disabled
+Write-Host "############# Check VGA Mode #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "svga.vgaOnly" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "svga.vgaOnly") {
+            if($size[$i].Value -eq $false) {
+            $counter++
+        }
+    }
+}
+if($counter -eq 0) {
+    Write-Host "[+] VGA mode is disabled on virtual machines`n" -ForegroundColor Green
+}
+else {
+    Write-Host "[-] VGA mode is enabled on virtual machines`n" -ForegroundColor Red
+}
+}
+else {
+    Write-Host "[-] VGA mode is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if 3D acceleration is enabled
+Write-Host "############# Check 3D Acceleration #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "mks.enable3d" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "mks.enable3d") {
+            if($size[$i].Value -eq $true) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] 3D Acceleration is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+    Write-Host "[-] 3D Accelration is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] 3D Accelration is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if disk shrinking is disabled 
+Write-Host "############# Check Disk Shrinking #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.diskShrink.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.diskShrink.disable") {
+            if($size[$i].Value -eq $false) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Disk shrinking is disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Disk shrinking is enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Disk shrinking is enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check if VIX Messages from VM are disabled
+Write-Host "############# Check VIX Messages from VM #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "isolation.tools.vixMessage.disable" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "isolation.tools.vixMessage.disable") {
+            if($size[$i].Value -eq $false -or $size[$i].Value -eq $null) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] VIX Messages from VM are disabled on virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] VIX Messages from VM are enabled on virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] VIX Messages from VM are enabled on virtual machines`n" -ForegroundColor Red
+}
+
+#Check number VM log files
+Write-Host "############# Check Number of VM Log Files  #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "log.keepOld" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "log.keepOld") {
+            if($size[$i].Value -ne 10) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Number of VM log files is configured properly`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Number of VM log files is configured properly`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Number of VM log files is configured properly`n" -ForegroundColor Red
+}
+
+#Check bidirectionial sending
+Write-Host "############# Check Bidirectionial Sending Between ESXi and VM #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "tools.guestlib.enableHostInfo" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "tools.guestlib.enableHostInfo") {
+            if($size[$i].Value -eq $true) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] ESXi not send informations to virtual machines`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] ESXi not send informations to virtual machines`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] ESXi not send informations to virtual machines`n" -ForegroundColor Red
+}
+
+#Check VM log size
+Write-Host "############# Check Number of VM Log Files  #############"
+$counter = 0
+$size = $vms | Get-AdvancedSetting -Name "log.rotateSize" | Select Entity,Name, Value
+if($size -ne $null) {
+    for($i = 0;$i -lt $size.Length;$i++) {
+        if($size[$i].Name -eq "log.rotateSize") {
+            if($size[$i].Value -ne 1024000) {
+                $counter++
+            }
+        }
+    }
+    if($counter -eq 0) {
+        Write-Host "[+] Number of VM log files is configured properly`n" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[-] Number of VM log files is configured properly`n" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "[-] Number of VM log files is configured properly`n" -ForegroundColor Red
 }
