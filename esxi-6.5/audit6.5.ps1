@@ -74,7 +74,7 @@ foreach ($esxhost in $hosts) {
     if($snmp.enable -eq $False) {
         Write-Host "[+] $esxhost : SNMP is disabled`n" -ForegroundColor Green
     }
-    elseif ($snmp.communities.Length -gt 0 ) {
+    elseif ($snmp.communities.Length -gt 0) {
         Write-Host "[+] $esxhost : SNMP is in Read Only`n" -ForegroundColor Green
     }
     else {
