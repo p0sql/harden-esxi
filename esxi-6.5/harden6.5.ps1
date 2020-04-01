@@ -33,7 +33,7 @@ Write-Host "############# Harden Communication Configuration #############"
 $_ntpservers = Read-Host "NTP Servers (separated by ',' whithout space)"
 $_ntpservers = $_ntpservers.Split(',').Split(' ')
 Write-Host "[+] Add NTP Servers on ESXi Hosts"
-if($_ntpservers.Length -eq 0) {
+if($_ntpservers.count -eq 0) {
     Write-Host "[+] ESXi Hosts already have NTP servers"
 }
 else {
@@ -127,14 +127,38 @@ Write-Host "[+] Set all vNetwork options to false"
 
 Write-Host "############# Harden Virtual Machines Configuration #############"
 
+
+
+$array_settings_true = "isolation.device.edit.disable", "isolation.device.connectable.disable", "isolation.tools.ghi.autologon.disable",
+"isolation.bios.bbs.disable", "isolation.tools.ghi.protocolhandler.info.disable", "isolation.tools.unity.taskbar.disable",
+"isolation.tools.unityActive.disable", "isolation.tools.unity.windowContents.disable", "isolation.tools.unity.push.update.disable",
+"isolation.tools.vmxDnDVersionGet.disable", "isolation.tools.guestDnDVersionSet.disable", "isolation.ghi.host.shellAction.disable",
+"isolation.tools.dispTopoRequest.disable", "isolation.tools.trashFolderState.disable", "isolation.tools.ghi.trayicon.disable", 
+"isolation.tools.unity.disable", "isolation.tools.unityInterlockOperation.disable", "isolation.tools.getCreds.disable", 
+"isolation.tools.hgfsServerSet.disable", "isolation.tools.ghi.launchmenu.change", "isolation.tools.memSchedFakeSampleStats.disable",
+"isolation.tools.copy.disable", "isolation.tools.dnd.disable", "isolation.tools.paste.disable", "isolation.tools.diskShrink.disable",
+"isolation.tools.diskWiper.disable", "isolation.tools.vixMessage.disable" 
+
+
+foreach ($setting in $array_settings_true) {
+    Write-Host "[+] $setting : Set to true"
+    Get-VM | New-AdvancedSetting -Name $setting -value $true -Force -Confirm:$false
+}
+
+
+$array_settings_false = "tools.guestlib.enableHostInfo", "isolation.tools.setGUIOptions.enable", "RemoteDisplay.vnc.enabled",
+"mks.enable3d"
+
+foreach ($setting in $array_settings_false) {
+    Write-Host "[+] $setting : Set to false"
+    Get-VM | New-AdvancedSetting -Name $setting -value $false -Force -Confirm:$false
+}
+
+Write-Host "[+] Limited log files for virtual machines"
+Get-VM | New-AdvancedSetting -Name "log.keepOld" -value "10" -Force -Confirm:$false
+
 Write-Host "[+] Limited informational messages from VM to VMX file"
-Get-VM | New-AdvancedSetting -Name "tools.setInfo.sizeLimit" -value 1048576 -Force
+Get-VM | New-AdvancedSetting -Name "tools.setInfo.sizeLimit" -value 1048576 -Force -Confirm:$false
 
 Write-Host "[+] Set maximum remote display connections to 3"
-Get-VM | New-AdvancedSetting -Name "RemoteDisplay.maxConnections" -value 3 -Force
-
-Write-Host "[+] Disable unauthorized modification and disconnection of devices"
-Get-VM | New-AdvancedSetting -Name "isolation.device.edit.disable" -value $true -Force
-
-Write-Host "[+] Disable unauthorized connection of devices"
-Get-VM | New-AdvancedSetting -Name "isolation.device.connectable.disable"
+Get-VM | New-AdvancedSetting -Name "RemoteDisplay.maxConnections" -value 3 -Force -Confirm:$false
