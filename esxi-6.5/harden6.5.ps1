@@ -73,9 +73,6 @@ foreach ($esxhost in $hosts) {
     Write-Host "[+] $esxhost :  Disable dvfilter"
 }
 
-Write-Host "############# Harden Logging Configuration #############"
-
-
 
 Write-Host "############# Harden Access Configuration #############"
 #Set to 3 Account Failures
@@ -108,15 +105,6 @@ Write-Host "[+] Set services timeout to 1 hour"
 Get-VMHost | Get-AdvancedSetting -Name 'UserVars.ESXiShellTimeOut' | Set-AdvancedSetting -Value "3600" -Confirm:$false
 
 
-Write-Host "############# Harden Console Configuration #############"
-
-
-
-
-Write-Host "############# Harden Storage Configuration #############"
-
-
-
 Write-Host "############# Harden vNetwork Configuration #############"
 foreach ($esxhost in $hosts) {
     $vswitchs = Get-VirtualSwitch -VMHost $esxhost| select Name
@@ -126,8 +114,6 @@ Write-Host "[+] Set all vNetwork options to false"
 
 
 Write-Host "############# Harden Virtual Machines Configuration #############"
-
-
 
 $array_settings_true = "isolation.device.edit.disable", "isolation.device.connectable.disable", "isolation.tools.ghi.autologon.disable",
 "isolation.bios.bbs.disable", "isolation.tools.ghi.protocolhandler.info.disable", "isolation.tools.unity.taskbar.disable",
